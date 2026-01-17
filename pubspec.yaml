@@ -51,6 +51,9 @@ dependencies:
   
   # Math and signal processing for PPG
   collection: ^1.18.0
+  
+  # Charts for PPG waveform visualization
+  fl_chart: ^0.69.0
 
 dev_dependencies:
   flutter_test:

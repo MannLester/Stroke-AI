@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:heart_bpm/heart_bpm.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'dart:math';
 import '../models/health_data.dart';
 import '../models/ppg_data.dart';
 import '../services/database_service.dart';
@@ -21,7 +22,18 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
   bool _isMeasuring = false;
   bool _hasPermission = false;
   int _currentHeartRate = 0;
-  List<double> _bpmValues = [];
+  
+  // Enhanced data collection for improved accuracy
+  List<double> _rawSensorValues = []; // Raw PPG signal from camera
+  List<int> _bpmReadings = []; // Individual BPM readings
+  List<int> _timestamps = []; // Timestamps for raw values
+  List<int> _filteredBpmValues = []; // Filtered BPM values for accuracy
+  
+  // For signal quality assessment
+  int _startTime = 0;
+  int _validReadingsCount = 0;
+  static const int _minValidReadings = 10; // Minimum readings for reliable result
+  static const int _bpmOutlierThreshold = 30; // BPM change threshold for outlier detection
   
   @override
   void initState() {
@@ -49,8 +61,13 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
 
     setState(() {
       _isMeasuring = true;
-      _bpmValues.clear();
+      _rawSensorValues.clear();
+      _bpmReadings.clear();
+      _timestamps.clear();
+      _filteredBpmValues.clear();
       _currentHeartRate = 0;
+      _validReadingsCount = 0;
+      _startTime = DateTime.now().millisecondsSinceEpoch;
     });
   }
 
@@ -62,23 +79,84 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
     });
 
     // Save data if we have measurements
-    if (_bpmValues.isNotEmpty) {
+    if (_filteredBpmValues.isNotEmpty) {
+      await _saveMeasurementData();
+    } else if (_bpmReadings.isNotEmpty) {
+      // Fallback to unfiltered if no filtered values
+      _filteredBpmValues = List.from(_bpmReadings);
       await _saveMeasurementData();
     }
   }
 
+  // Apply outlier rejection using median filter
+  void _addBpmReading(int bpm) {
+    _bpmReadings.add(bpm);
+    
+    // Outlier rejection: ignore readings that deviate too much from recent average
+    if (_filteredBpmValues.isEmpty) {
+      if (bpm >= 40 && bpm <= 200) { // Basic physiological limits
+        _filteredBpmValues.add(bpm);
+        _validReadingsCount++;
+      }
+    } else {
+      // Calculate recent average (last 5 readings)
+      int startIdx = max(0, _filteredBpmValues.length - 5);
+      List<int> recent = _filteredBpmValues.sublist(startIdx);
+      double recentAvg = recent.reduce((a, b) => a + b) / recent.length;
+      
+      // Accept reading if within threshold of recent average and physiological limits
+      if ((bpm - recentAvg).abs() <= _bpmOutlierThreshold && 
+          bpm >= 40 && bpm <= 200) {
+        _filteredBpmValues.add(bpm);
+        _validReadingsCount++;
+      }
+    }
+  }
+
+  // Calculate Heart Rate Variability (SDNN - Standard Deviation of NN intervals)
+  double? _calculateHRV() {
+    if (_filteredBpmValues.length < 5) return null;
+    
+    // Convert BPM to RR intervals (ms)
+    List<double> rrIntervals = _filteredBpmValues
+        .map((bpm) => 60000.0 / bpm)
+        .toList();
+    
+    // Calculate mean
+    double mean = rrIntervals.reduce((a, b) => a + b) / rrIntervals.length;
+    
+    // Calculate standard deviation (SDNN)
+    double sumSquaredDiff = rrIntervals
+        .map((rr) => pow(rr - mean, 2).toDouble())
+        .reduce((a, b) => a + b);
+    
+    double sdnn = sqrt(sumSquaredDiff / rrIntervals.length);
+    return sdnn;
+  }
+
   Future<void> _saveMeasurementData() async {
     try {
-      // Calculate average heart rate from collected values
-      double avgBpm = _bpmValues.reduce((a, b) => a + b) / _bpmValues.length;
+      // Calculate statistics from filtered values for improved accuracy
+      double avgBpm = _filteredBpmValues.reduce((a, b) => a + b) / _filteredBpmValues.length;
+      int minBpm = _filteredBpmValues.reduce(min);
+      int maxBpm = _filteredBpmValues.reduce(max);
+      double? hrv = _calculateHRV();
+      
+      // Calculate actual duration
+      double duration = (DateTime.now().millisecondsSinceEpoch - _startTime) / 1000.0;
       
       final ppgData = PPGData(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         healthDataId: widget.healthData.id,
-        rawValues: _bpmValues, // Store BPM values as raw data
+        rawValues: _rawSensorValues, // Store raw sensor data
+        bpmReadings: _bpmReadings, // Store all BPM readings
+        timestamps: _timestamps, // Store timestamps
         heartRate: avgBpm.round(),
-        duration: _bpmValues.length * 1.0, // Approximate duration
+        duration: duration,
         timestamp: DateTime.now(),
+        hrv: hrv,
+        minBpm: minBpm,
+        maxBpm: maxBpm,
       );
 
       await _databaseService.insertPPGData(ppgData);
@@ -121,9 +199,39 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
               const SizedBox(height: 8),
               Row(
                 children: [
+                  const Icon(Icons.trending_down, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Text('Min: ${ppgData.minBpm ?? "-"} BPM'),
+                  const SizedBox(width: 16),
+                  const Icon(Icons.trending_up, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  Text('Max: ${ppgData.maxBpm ?? "-"} BPM'),
+                ],
+              ),
+              if (ppgData.hrv != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.timeline, color: Colors.purple),
+                    const SizedBox(width: 8),
+                    Text('HRV (SDNN): ${ppgData.hrv!.toStringAsFixed(1)} ms'),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
                   const Icon(Icons.timer, color: Colors.teal),
                   const SizedBox(width: 8),
-                  Text('Measurements taken: ${_bpmValues.length}'),
+                  Text('Duration: ${ppgData.duration.toStringAsFixed(1)}s'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.check_circle, color: Colors.green),
+                  const SizedBox(width: 8),
+                  Text('Valid readings: $_validReadingsCount / ${_bpmReadings.length}'),
                 ],
               ),
             ],
@@ -272,9 +380,44 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
                         ],
                       ),
                       const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Valid: $_validReadingsCount',
+                            style: const TextStyle(color: Colors.green),
+                          ),
+                          const SizedBox(width: 16),
+                          Text(
+                            'Total: ${_bpmReadings.length}',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                      // Signal quality indicator
+                      const SizedBox(height: 8),
+                      LinearProgressIndicator(
+                        value: _validReadingsCount >= _minValidReadings 
+                            ? 1.0 
+                            : _validReadingsCount / _minValidReadings,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          _validReadingsCount >= _minValidReadings 
+                              ? Colors.green 
+                              : Colors.orange,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
                       Text(
-                        'Measurements taken: ${_bpmValues.length}',
-                        style: const TextStyle(color: Colors.grey),
+                        _validReadingsCount >= _minValidReadings 
+                            ? 'Ready to save' 
+                            : 'Collecting data...',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _validReadingsCount >= _minValidReadings 
+                              ? Colors.green 
+                              : Colors.orange,
+                        ),
                       ),
                     ],
                   ),
@@ -291,13 +434,16 @@ class _PPGMeasurementScreenState extends State<PPGMeasurementScreen> {
                   onBPM: (value) {
                     setState(() {
                       _currentHeartRate = value;
-                      _bpmValues.add(value.toDouble());
+                      _addBpmReading(value); // Use filtered addition
                     });
-                    print('Heart Rate: $value BPM');
                   },
                   onRawData: (value) {
-                    // Optional: handle raw sensor data
-                    print('Raw sensor value: $value');
+                    // Store raw sensor data for waveform display
+                    int currentTime = DateTime.now().millisecondsSinceEpoch - _startTime;
+                    setState(() {
+                      _rawSensorValues.add(value.value.toDouble());
+                      _timestamps.add(currentTime);
+                    });
                   },
                   child: Container(
                     width: double.infinity,

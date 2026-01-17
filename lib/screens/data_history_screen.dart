@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/health_data.dart';
 import '../models/ppg_data.dart';
 import '../services/database_service.dart';
+import 'ppg_detail_screen.dart';
 
 class DataHistoryScreen extends StatefulWidget {
   const DataHistoryScreen({Key? key}) : super(key: key);
@@ -168,6 +169,15 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
     if (bmi < 25) return Colors.green;
     if (bmi < 30) return Colors.orange;
     return Colors.red;
+  }
+
+  void _viewPPGDetails(PPGData ppgData) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PPGDetailScreen(ppgData: ppgData),
+      ),
+    );
   }
 
   @override
@@ -352,6 +362,55 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                                               ],
                                             ),
                                             const SizedBox(height: 8),
+                                            // Additional stats row
+                                            Row(
+                                              children: [
+                                                if (ppgData.minBpm != null && ppgData.maxBpm != null) ...[
+                                                  Expanded(
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.grey.withOpacity(0.1),
+                                                        borderRadius: BorderRadius.circular(8),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisAlignment: MainAxisAlignment.center,
+                                                        children: [
+                                                          const Icon(Icons.trending_down, size: 14, color: Colors.blue),
+                                                          Text(' ${ppgData.minBpm}', style: const TextStyle(fontSize: 12)),
+                                                          const Text(' - ', style: TextStyle(fontSize: 12)),
+                                                          const Icon(Icons.trending_up, size: 14, color: Colors.orange),
+                                                          Text(' ${ppgData.maxBpm}', style: const TextStyle(fontSize: 12)),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                ],
+                                                if (ppgData.hrv != null)
+                                                  Expanded(
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.purple.withOpacity(0.1),
+                                                        borderRadius: BorderRadius.circular(8),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisAlignment: MainAxisAlignment.center,
+                                                        children: [
+                                                          const Icon(Icons.timeline, size: 14, color: Colors.purple),
+                                                          const SizedBox(width: 4),
+                                                          Text(
+                                                            'HRV: ${ppgData.hrv!.toStringAsFixed(1)}ms',
+                                                            style: const TextStyle(fontSize: 12, color: Colors.purple),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
                                             Row(
                                               children: [
                                                 Icon(Icons.data_usage, size: 16, color: Colors.grey[600]),
@@ -368,6 +427,24 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                                                   style: TextStyle(color: Colors.grey[600], fontSize: 12),
                                                 ),
                                               ],
+                                            ),
+                                            const SizedBox(height: 12),
+                                            // View Details Button
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: ElevatedButton.icon(
+                                                onPressed: () => _viewPPGDetails(ppgData),
+                                                icon: const Icon(Icons.show_chart, size: 18),
+                                                label: const Text('View Waveform & Data'),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: Colors.teal,
+                                                  foregroundColor: Colors.white,
+                                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
                                           ],
                                         ),
