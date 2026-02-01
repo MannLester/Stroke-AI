@@ -2,6 +2,7 @@
 // Handles calculation of performance metrics and resource monitoring
 
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
@@ -109,6 +110,9 @@ class MetricsService {
   final Battery _battery = Battery();
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
   
+  // Platform channel for native memory measurement (iOS & Android)
+  static const MethodChannel _memoryChannel = MethodChannel('com.msrf_app/memory');
+  
   /// Calculate performance metrics from predictions and labels
   PerformanceMetrics calculatePerformance({
     required List<int> predictions,
@@ -201,15 +205,29 @@ class MetricsService {
     return {'model': model, 'osVersion': osVersion};
   }
   
-  /// Get current memory usage in KB using Dart's ProcessInfo
-  /// This returns the Resident Set Size (RSS) - actual physical memory used
-  int getCurrentMemoryKB() {
+  /// Get current memory usage in KB
+  /// Uses native platform channels for iOS/Android (accurate)
+  /// Falls back to ProcessInfo.currentRss for desktop platforms
+  Future<int> getCurrentMemoryKB() async {
     try {
-      // ProcessInfo.currentRss returns memory in bytes
-      return ProcessInfo.currentRss ~/ 1024;
+      if (Platform.isIOS || Platform.isAndroid) {
+        // Use native platform channel for mobile
+        // iOS: uses task_info (mach_task_basic_info.resident_size)
+        // Android: uses Debug.MemoryInfo (PSS - Proportional Set Size)
+        final int memoryBytes = await _memoryChannel.invokeMethod('getMemoryUsage');
+        return memoryBytes ~/ 1024; // Convert bytes to KB
+      } else {
+        // Desktop platforms: use Dart's ProcessInfo
+        return ProcessInfo.currentRss ~/ 1024;
+      }
     } catch (e) {
       print('Error getting memory info: $e');
-      return -1;
+      // Fallback to ProcessInfo if platform channel fails
+      try {
+        return ProcessInfo.currentRss ~/ 1024;
+      } catch (e2) {
+        return -1;
+      }
     }
   }
   

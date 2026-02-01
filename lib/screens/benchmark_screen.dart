@@ -95,8 +95,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       // Get battery level before
       int batteryStart = await _metricsService.getBatteryLevel();
       
-      // Get memory BEFORE inference (actual measurement)
-      int memoryBeforeKB = _metricsService.getCurrentMemoryKB();
+      // Get memory BEFORE inference (actual native measurement)
+      int memoryBeforeKB = await _metricsService.getCurrentMemoryKB();
 
       // Warm-up run (exclude from timing)
       if (_inputData!.isNotEmpty) {
@@ -111,8 +111,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       stopwatch.stop();
       double latencyMs = stopwatch.elapsedMicroseconds / 1000.0;
       
-      // Get memory AFTER inference (actual measurement)
-      int memoryAfterKB = _metricsService.getCurrentMemoryKB();
+      // Get memory AFTER inference (actual native measurement)
+      int memoryAfterKB = await _metricsService.getCurrentMemoryKB();
 
       // Get battery level after
       int batteryEnd = await _metricsService.getBatteryLevel();
@@ -179,8 +179,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       // Get battery level before
       int batteryStart = await _metricsService.getBatteryLevel();
       
-      // Get memory BEFORE inference (actual measurement)
-      int memoryBeforeKB = _metricsService.getCurrentMemoryKB();
+      // Get memory BEFORE inference (actual native measurement)
+      int memoryBeforeKB = await _metricsService.getCurrentMemoryKB();
 
       // Warm-up run (exclude from timing)
       _classifier!.predictSingle(singleSample);
@@ -193,8 +193,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       stopwatch.stop();
       double latencyMs = stopwatch.elapsedMicroseconds / 1000.0;
       
-      // Get memory AFTER inference (actual measurement)
-      int memoryAfterKB = _metricsService.getCurrentMemoryKB();
+      // Get memory AFTER inference (actual native measurement)
+      int memoryAfterKB = await _metricsService.getCurrentMemoryKB();
 
       // Get battery level after
       int batteryEnd = await _metricsService.getBatteryLevel();

@@ -90,16 +90,41 @@ String model = info.model;
 String osVersion = 'iOS ${info.systemVersion}';
 ```
 
-### 3. Dart dart:developer (Built-in)
-- **Purpose**: Actual memory measurement using ProcessInfo.currentRss
-- **Documentation**: https://api.dart.dev/stable/dart-io/ProcessInfo-class.html
-- **Usage**:
-```dart
-import 'dart:io';
+### 3. Native Platform Channels (Memory Measurement)
+- **Purpose**: Actual memory measurement using native iOS/Android APIs
+- **iOS**: Uses `task_info` with `mach_task_basic_info.resident_size`
+- **Android**: Uses `Debug.MemoryInfo` with `totalPss` (Proportional Set Size)
+- **Documentation**: 
+  - iOS: https://developer.apple.com/documentation/kernel/mach_task_basic_info
+  - Android: https://developer.android.com/reference/android/os/Debug.MemoryInfo
 
-// Get actual memory usage in bytes
-int memoryBytes = ProcessInfo.currentRss;
-int memoryKB = memoryBytes ~/ 1024;
+**iOS Implementation** ([AppDelegate.swift](ios/Runner/AppDelegate.swift)):
+```swift
+private func getMemoryUsage() -> Int64 {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+        }
+    }
+    
+    if result == KERN_SUCCESS {
+        return Int64(info.resident_size)  // Returns bytes
+    }
+    return -1
+}
+```
+
+**Android Implementation** ([MainActivity.kt](android/app/src/main/kotlin/com/example/msrf_app/MainActivity.kt)):
+```kotlin
+private fun getMemoryUsage(): Long {
+    val memInfo = Debug.MemoryInfo()
+    Debug.getMemoryInfo(memInfo)
+    // totalPss returns KB, convert to bytes
+    return memInfo.totalPss.toLong() * 1024
+}
 ```
 
 ### 4. Dart Stopwatch (Built-in)
@@ -175,21 +200,40 @@ Future<int> getBatteryLevel() async {
 
 ### Memory Measurement
 
-Memory usage is measured using Dart's built-in `ProcessInfo.currentRss` which returns the **Resident Set Size (RSS)** - the actual physical memory currently allocated to the process.
+Memory usage is measured using **native platform APIs** via Flutter's MethodChannel for accurate cross-platform results.
+
+| Platform | API Used | Metric |
+|----------|----------|--------|
+| **iOS** | `task_info` | `resident_size` (RSS) |
+| **Android** | `Debug.MemoryInfo` | `totalPss` (PSS) |
+| **Desktop** | `ProcessInfo.currentRss` | RSS |
+
+**Why Different APIs?**
+- **iOS RSS (Resident Set Size)**: Physical memory currently mapped to the process
+- **Android PSS (Proportional Set Size)**: More accurate for Android as it accounts for shared memory proportionally
 
 **Code Implementation** ([metrics_service.dart](lib/services/metrics_service.dart)):
 
 ```dart
-import 'dart:io';
+import 'package:flutter/services.dart';
 
-/// Get current memory usage in KB using Dart's ProcessInfo
-/// This returns the Resident Set Size (RSS) - actual physical memory used
-int getCurrentMemoryKB() {
+// Platform channel for native memory measurement
+static const MethodChannel _memoryChannel = MethodChannel('com.msrf_app/memory');
+
+/// Get current memory usage in KB
+/// Uses native platform channels for iOS/Android (accurate)
+/// Falls back to ProcessInfo.currentRss for desktop platforms
+Future<int> getCurrentMemoryKB() async {
   try {
-    // ProcessInfo.currentRss returns memory in bytes
-    return ProcessInfo.currentRss ~/ 1024;
+    if (Platform.isIOS || Platform.isAndroid) {
+      // Use native platform channel for mobile
+      final int memoryBytes = await _memoryChannel.invokeMethod('getMemoryUsage');
+      return memoryBytes ~/ 1024;
+    } else {
+      // Desktop: use Dart's ProcessInfo
+      return ProcessInfo.currentRss ~/ 1024;
+    }
   } catch (e) {
-    print('Error getting memory info: $e');
     return -1;
   }
 }
@@ -198,24 +242,24 @@ int getCurrentMemoryKB() {
 **Measurement Process** ([benchmark_screen.dart](lib/screens/benchmark_screen.dart)):
 
 ```dart
-// Get memory BEFORE inference (actual measurement)
-int memoryBeforeKB = _metricsService.getCurrentMemoryKB();
+// Get memory BEFORE inference (native measurement)
+int memoryBeforeKB = await _metricsService.getCurrentMemoryKB();
 
 // Run inference
 _predictions = _classifier!.predictBatch(_inputData!);
 
-// Get memory AFTER inference (actual measurement)
-int memoryAfterKB = _metricsService.getCurrentMemoryKB();
+// Get memory AFTER inference (native measurement)
+int memoryAfterKB = await _metricsService.getCurrentMemoryKB();
 
 // Memory used = After - Before
 int memoryUsedKB = memoryAfterKB - memoryBeforeKB;
 ```
 
 **Key Points**:
-- Uses `ProcessInfo.currentRss` from `dart:io` - native Dart API
-- Returns RSS (Resident Set Size) - actual physical RAM usage
-- Measured in bytes, converted to KB for readability
-- Captures memory before AND after inference for accurate delta
+- Uses native iOS `task_info` API for accurate RSS measurement
+- Uses native Android `Debug.MemoryInfo` for PSS measurement
+- Falls back to Dart's `ProcessInfo.currentRss` on desktop
+- Measured before AND after inference for accurate delta
 
 ### Device Information
 
@@ -308,6 +352,14 @@ lib/
 └── screens/
     └── benchmark_screen.dart          # Benchmark UI and orchestration
 
+ios/
+└── Runner/
+    └── AppDelegate.swift              # iOS native memory measurement
+
+android/
+└── app/src/main/kotlin/com/example/msrf_app/
+    └── MainActivity.kt                # Android native memory measurement
+
 assets/
 ├── data/
 │   └── sample_input.csv               # 1000 test samples (26 features each)
@@ -380,7 +432,8 @@ To reproduce these measurements:
 - [x] Latency measured with microsecond precision (Stopwatch)
 - [x] Battery level captured before and after inference (battery_plus)
 - [x] Device information retrieved programmatically (device_info_plus)
-- [x] Memory measured using actual RSS (ProcessInfo.currentRss)
+- [x] Memory measured using native APIs (iOS: task_info, Android: Debug.MemoryInfo)
+- [x] Cross-platform support (iOS, Android, Windows, macOS, Linux)
 - [x] All metrics displayed in user interface
 - [x] Packages are well-documented and maintained
 - [x] NO fake/estimated metrics - all measurements are real
