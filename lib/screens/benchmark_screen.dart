@@ -1,5 +1,6 @@
 // Benchmark Screen - Main UI for MSRF Mobile Testing
 
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/msrf_classifier.dart';
 import '../services/data_service.dart';
@@ -18,6 +19,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
   bool _isRunning = false;
   bool _dataLoaded = false;
   String _statusMessage = 'Ready to load data';
+  String _benchmarkMode = ''; // 'single' or 'all'
+  int? _selectedSampleIndex;
   
   // Data
   List<List<double>>? _inputData;
@@ -71,7 +74,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
     }
   }
 
-  Future<void> _runBenchmark() async {
+  Future<void> _runAllSamples() async {
     if (_inputData == null || _classifier == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please load data first')),
@@ -81,9 +84,11 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
 
     setState(() {
       _isRunning = true;
-      _statusMessage = 'Running inference...';
+      _benchmarkMode = 'all';
+      _statusMessage = 'Running inference on ALL ${_inputData!.length} samples...';
       _result = null;
       _predictions = null;
+      _selectedSampleIndex = null;
     });
 
     try {
@@ -139,7 +144,96 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
 
       setState(() {
         _isRunning = false;
-        _statusMessage = 'Benchmark complete!';
+        _statusMessage = 'Benchmark complete! (All ${_inputData!.length} samples)';
+      });
+    } catch (e) {
+      setState(() {
+        _isRunning = false;
+        _statusMessage = 'Error: $e';
+      });
+    }
+  }
+
+  Future<void> _runSingleSample() async {
+    if (_inputData == null || _classifier == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please load data first')),
+      );
+      return;
+    }
+
+    // Select a random sample
+    final random = Random();
+    _selectedSampleIndex = random.nextInt(_inputData!.length);
+    final singleSample = _inputData![_selectedSampleIndex!];
+
+    setState(() {
+      _isRunning = true;
+      _benchmarkMode = 'single';
+      _statusMessage = 'Running inference on sample #${_selectedSampleIndex! + 1}...';
+      _result = null;
+      _predictions = null;
+    });
+
+    try {
+      // Get battery level before
+      int batteryStart = await _metricsService.getBatteryLevel();
+      
+      // Get memory BEFORE inference (actual measurement)
+      int memoryBeforeKB = _metricsService.getCurrentMemoryKB();
+
+      // Warm-up run (exclude from timing)
+      _classifier!.predictSingle(singleSample);
+
+      // Timed inference - single sample
+      final stopwatch = Stopwatch()..start();
+      
+      int prediction = _classifier!.predictSingle(singleSample);
+      
+      stopwatch.stop();
+      double latencyMs = stopwatch.elapsedMicroseconds / 1000.0;
+      
+      // Get memory AFTER inference (actual measurement)
+      int memoryAfterKB = _metricsService.getCurrentMemoryKB();
+
+      // Get battery level after
+      int batteryEnd = await _metricsService.getBatteryLevel();
+
+      // Store single prediction
+      _predictions = [prediction];
+
+      // Calculate performance metrics (single sample)
+      List<int>? singleLabel = (_labels != null && _selectedSampleIndex! < _labels!.length) 
+          ? [_labels![_selectedSampleIndex!]] 
+          : null;
+      
+      PerformanceMetrics performance = _metricsService.calculatePerformance(
+        predictions: _predictions!,
+        labels: singleLabel,
+      );
+
+      // Calculate resource metrics
+      ResourceMetrics resources = await _metricsService.createResourceMetrics(
+        latencyMs: latencyMs,
+        sampleCount: 1,
+        batteryStart: batteryStart,
+        batteryEnd: batteryEnd,
+        memoryBeforeKB: memoryBeforeKB,
+        memoryAfterKB: memoryAfterKB,
+      );
+
+      // Create result
+      _result = BenchmarkResult(
+        performance: performance,
+        resources: resources,
+        timestamp: DateTime.now(),
+        sampleCount: 1,
+        labelsAvailable: singleLabel != null,
+      );
+
+      setState(() {
+        _isRunning = false;
+        _statusMessage = 'Single sample benchmark complete! (Sample #${_selectedSampleIndex! + 1})';
       });
     } catch (e) {
       setState(() {
@@ -234,26 +328,59 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
   }
 
   Widget _buildRunButton() {
-    return SizedBox(
-      height: 56,
-      child: ElevatedButton.icon(
-        onPressed: (_dataLoaded && !_isRunning) ? _runBenchmark : null,
-        icon: _isRunning
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.play_arrow, size: 28),
-        label: Text(
-          _isRunning ? 'Running...' : 'Run MSRF Benchmark',
-          style: const TextStyle(fontSize: 18),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Run Single Sample Button
+        SizedBox(
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: (_dataLoaded && !_isRunning) ? _runSingleSample : null,
+            icon: _isRunning && _benchmarkMode == 'single'
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.person, size: 28),
+            label: Text(
+              _isRunning && _benchmarkMode == 'single' 
+                  ? 'Running...' 
+                  : 'Run Single Sample (Random)',
+              style: const TextStyle(fontSize: 16),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+          ),
         ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+        const SizedBox(height: 12),
+        // Run All Samples Button
+        SizedBox(
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: (_dataLoaded && !_isRunning) ? _runAllSamples : null,
+            icon: _isRunning && _benchmarkMode == 'all'
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.all_inclusive, size: 28),
+            label: Text(
+              _isRunning && _benchmarkMode == 'all' 
+                  ? 'Running...' 
+                  : 'Run All Samples (${_inputData?.length ?? 0})',
+              style: const TextStyle(fontSize: 16),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              foregroundColor: Theme.of(context).colorScheme.onPrimary,
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
