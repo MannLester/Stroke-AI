@@ -1,0 +1,202 @@
+import joblib
+import os
+import numpy as np
+import pandas as pd
+import json
+
+# ==========================================
+# CELL 7: EXPORT DEPLOYMENT PACKAGE (BATCH)
+# ==========================================
+print("\n" + "="*80)
+print(" [PHASE 7] EXPORTING DEPLOYMENT ASSETS (BATCH MODE)")
+print(" Generating files needed for Smartphone App integration.")
+print("="*80)
+
+# 1. Create Directory
+deploy_dir = os.path.join(output_dir, "Deployment_Package")
+os.makedirs(deploy_dir, exist_ok=True)
+print(f"Target Directory: {deploy_dir}")
+
+# 2. EXPORT THE TRANSLATOR (SCALER)
+scaler_path = os.path.join(deploy_dir, "scaler_parameters.json")
+scaler_params = {
+    "mean": scaler_h.mean_.tolist(),
+    "scale": scaler_h.scale_.tolist(),
+    "feature_names_in": getattr(scaler_h, "feature_names_in_", FULL_FEATURE_NAMES).tolist() if hasattr(scaler_h, "feature_names_in_") else FULL_FEATURE_NAMES
+}
+with open(scaler_path, "w") as f:
+    json.dump(scaler_params, f, indent=4)
+print(f"  [√] Scaler Params saved: {scaler_path}")
+
+# 3. EXPORT REAL INPUT BATCH (1000 Windows)
+# Select up to 1000 real windows from the holdout set
+# These are real patients, no synthetic data.
+n_samples = 1000
+if len(X_test_h_sel) < n_samples:
+    n_samples = len(X_test_h_sel)
+    print(f"      (Note: Test set only has {n_samples} windows. Exporting all of them.)")
+
+sample_batch = X_test_h_sel[:n_samples]
+sample_input_path = os.path.join(deploy_dir, "sample_input.csv")
+
+# Save as CSV (1000 rows, N columns)
+np.savetxt(sample_input_path, sample_batch, delimiter=",", fmt='%.6f')
+
+print(f"  [√] Sample Input Batch saved: {sample_input_path}")
+print(f"      (Contains {sample_batch.shape[0]} real windows with {sample_batch.shape[1]} features)")
+
+# 4. EXPORT TRAINED MODELS
+print(f"  [√] Exporting Models:")
+for name, model in holdout_models.items():
+    filename = f"model_{name}.joblib"
+    filepath = os.path.join(deploy_dir, filename)
+    joblib.dump(model, filepath)
+    size_kb = os.path.getsize(filepath) / 1024
+    print(f"      - {name:<12}: Saved to {filename} ({size_kb:.1f} KB)")
+
+# Special Export for LSTM
+lstm_path = os.path.join(deploy_dir, "model_LSTM.keras")
+lstm_h.save(lstm_path)
+size_lstm = os.path.getsize(lstm_path) / 1024
+print(f"      - {'LSTM':<12}: Saved to model_LSTM.keras ({size_lstm:.1f} KB)")
+
+print("\nDONE. Files ready for smartphone simulation.")
+
+# ==========================================
+# CELL 8: SIMULATION RUN (BATCH BENCHMARK)
+# ==========================================
+import joblib
+import json
+import numpy as np
+import os
+import time
+import sys
+from tensorflow.keras.models import load_model
+
+print(f"\n" + "="*80)
+print(f" [PHASE 8] SMARTPHONE SIMULATION RUN")
+print(f" Processing batch data from disk and measuring inference latency.")
+print("="*80)
+
+deploy_dir = os.path.join(output_dir, "Deployment_Package")
+
+# 1. LOAD THE BATCH INPUT
+# Simulating: The phone reading the CSV file containing 1000 window recordings
+input_path = os.path.join(deploy_dir, "sample_input.csv")
+
+if not os.path.exists(input_path):
+    print(f"[Error] Input file not found at {input_path}. Did you run Cell 7?")
+else:
+    try:
+        loaded_batch = np.loadtxt(input_path, delimiter=",")
+        
+        # Handle case where only 1 row exists (make sure it is 2D)
+        if loaded_batch.ndim == 1:
+            loaded_batch = loaded_batch.reshape(1, -1)
+            
+        print(f"[Data] Loaded batch shape: {loaded_batch.shape}")
+        print(f"       (Simulating processing of {loaded_batch.shape[0]} patient windows)")
+        
+    except Exception as e:
+        print(f"[Error] Could not load input data: {e}")
+        loaded_batch = None
+
+# 2. RUN BENCHMARK LOOP
+if loaded_batch is not None:
+    # Find all model files
+    model_files = sorted([f for f in os.listdir(deploy_dir) if f.startswith("model_")])
+    
+    simulation_results = []
+
+    print(f"\n{'MODEL':<15} | {'STATUS':<10} | {'PROGRESS'}")
+    print("-" * 50)
+
+    for filename in model_files:
+        filepath = os.path.join(deploy_dir, filename)
+        # Extract clean name (e.g., "model_LogReg.joblib" -> "LogReg")
+        model_name = filename.replace("model_", "").replace(".joblib", "").replace(".keras", "").replace(".h5", "")
+        
+        try:
+            # --- A. LOAD MODEL ---
+            # We don't time loading because apps usually load models once at startup
+            if filename.endswith(".keras") or filename.endswith(".h5"):
+                model = load_model(filepath)
+                is_deep_learning = True
+            else:
+                model = joblib.load(filepath)
+                is_deep_learning = False
+                
+            # --- B. PREPARE INPUT ---
+            # Deep Learning models (LSTM) often need 3D input (Samples, TimeSteps, Features)
+            if model_name == "LSTM":
+                # Reshape (N, Features) -> (N, 1, Features)
+                run_input = loaded_batch.reshape(loaded_batch.shape[0], 1, loaded_batch.shape[1])
+            elif model_name == "MSRF":
+                # If your MSRF wrapper expects a list, convert it. 
+                # (Assuming based on your previous cells it handles arrays, but keeping it robust)
+                run_input = loaded_batch 
+            else:
+                run_input = loaded_batch
+
+            # --- C. WARMUP (Optional but realistic) ---
+            # Doing one dummy prediction to wake up CPU/GPU caches
+            if is_deep_learning:
+                _ = model.predict(run_input[:1], verbose=0)
+            else:
+                _ = model.predict(run_input[:1])
+
+            # --- D. TIMED INFERENCE ---
+            print(f"{model_name:<15} | Running... | ", end="")
+            
+            start_time = time.perf_counter()
+            
+            if is_deep_learning:
+                probs = model.predict(run_input, verbose=0).flatten()
+                preds = (probs > 0.5).astype(int)
+            else:
+                preds = model.predict(run_input)
+                
+            end_time = time.perf_counter()
+            
+            # --- E. CALCULATE METRICS ---
+            total_duration_ms = (end_time - start_time) * 1000
+            latency_per_window = total_duration_ms / len(loaded_batch)
+            
+            risk_count = np.sum(preds)
+            total_count = len(preds)
+            
+            simulation_results.append({
+                "Model": model_name,
+                "Latency (ms/win)": latency_per_window,
+                "Total Time (ms)": total_duration_ms,
+                "Throughput (win/sec)": 1000 / latency_per_window if latency_per_window > 0 else 0,
+                "Risk Predictions": f"{risk_count}/{total_count}"
+            })
+            
+            print("Done.")
+
+        except Exception as e:
+            print(f"FAILED ({str(e)})")
+
+    # 3. DISPLAY FINAL SIMULATION REPORT
+    df_sim = pd.DataFrame(simulation_results)
+    
+    # Reorder columns for readability
+    cols = ["Model", "Latency (ms/win)", "Total Time (ms)", "Throughput (win/sec)", "Risk Predictions"]
+    df_sim = df_sim[cols]
+
+    print("\n" + "="*80)
+    print(" FINAL SMARTPHONE SIMULATION REPORT")
+    print("="*80)
+    print(df_sim.to_string(index=False, float_format="%.4f"))
+    
+    # Save results
+    sim_csv_path = os.path.join(output_dir, "smartphone_simulation_results.csv")
+    df_sim.to_csv(sim_csv_path, index=False)
+    print(f"\n[SAVED] Simulation metrics saved to: {sim_csv_path}")
+
+    # Interpretation
+    fastest = df_sim.loc[df_sim["Latency (ms/win)"].idxmin()]
+    print("-" * 80)
+    print(f"OBSERVATION: The fastest model is {fastest['Model']} at {fastest['Latency (ms/win)']:.4f} ms per window.")
+    print("NOTE: On a real smartphone, multiply Latency by approx 2x-5x to account for lower clock speeds.")
