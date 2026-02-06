@@ -42,3 +42,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // TensorFlow Lite Select TF Ops for LSTM support
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.13.0")
+}

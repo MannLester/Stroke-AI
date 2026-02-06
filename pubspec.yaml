@@ -51,6 +51,9 @@ dependencies:
   
   # JSON handling
   json_annotation: ^4.8.1
+  
+  # TensorFlow Lite for LSTM model
+  tflite_flutter: ^0.11.0
 
 dev_dependencies:
   flutter_test:

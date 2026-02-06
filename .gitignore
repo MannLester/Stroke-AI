@@ -12,6 +12,12 @@
 .swiftpm/
 migrate_working_dir/
 
+# Python virtual environment
+python/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
 # IntelliJ related
 *.iml
 *.ipr

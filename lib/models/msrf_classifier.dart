@@ -7,15 +7,22 @@
 // 3. Combines predictions using HMM forward-backward
 
 import 'dart:math';
+import 'base_classifier.dart';
 import 'generated/expert_0.dart' as expert0;
 import 'generated/expert_1.dart' as expert1;
 import 'generated/expert_2.dart' as expert2;
 
-class MSRFClassifier {
+class MSRFClassifier implements BaseClassifier {
   final int nStates;
   final String mode;
   final List<double> startProb;
   final List<List<double>> transMat;
+  
+  @override
+  String get modelName => 'MSRF';
+  
+  @override
+  String get modelDescription => 'Multi-State Random Forest with HMM-based expert switching';
   
   MSRFClassifier({
     required this.nStates,
@@ -23,6 +30,11 @@ class MSRFClassifier {
     required this.startProb,
     required this.transMat,
   });
+  
+  @override
+  Future<void> initialize() async {
+    // Already initialized via constructor
+  }
   
   /// Factory constructor to create from JSON params
   factory MSRFClassifier.fromJson(Map<String, dynamic> json) {
@@ -169,6 +181,7 @@ class MSRFClassifier {
   }
   
   /// Predict class for a single sample
+  @override
   int predictSingle(List<double> input, {double threshold = 0.5}) {
     List<double> proba = predictProbaSingle(input);
     return proba[1] > threshold ? 1 : 0;
@@ -180,6 +193,7 @@ class MSRFClassifier {
   }
   
   /// Predict classes for batch of samples
+  @override
   List<int> predictBatch(List<List<double>> inputs, {double threshold = 0.5}) {
     return inputs.map((input) => predictSingle(input, threshold: threshold)).toList();
   }

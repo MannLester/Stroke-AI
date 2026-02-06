@@ -2,9 +2,29 @@
 
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../models/base_classifier.dart';
 import '../models/msrf_classifier.dart';
+import '../models/decision_tree_classifier.dart';
+import '../models/logistic_regression_classifier.dart';
+import '../models/random_forest_classifier.dart';
+import '../models/xgboost_classifier.dart';
+import '../models/lstm_classifier.dart';
 import '../services/data_service.dart';
 import '../services/metrics_service.dart';
+
+/// Enum for available models
+enum ModelType {
+  msrf('MSRF', 'Multi-State Random Forest with HMM'),
+  decisionTree('Decision Tree', 'Simple decision tree classifier'),
+  logisticRegression('Logistic Regression', 'Linear classifier with sigmoid'),
+  randomForest('Random Forest', 'Ensemble of decision trees'),
+  xgboost('XGBoost', 'Gradient Boosting with regularization'),
+  lstm('LSTM', 'Long Short-Term Memory neural network');
+  
+  final String displayName;
+  final String description;
+  const ModelType(this.displayName, this.description);
+}
 
 class BenchmarkScreen extends StatefulWidget {
   const BenchmarkScreen({super.key});
@@ -22,10 +42,13 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
   String _benchmarkMode = ''; // 'single' or 'all'
   int? _selectedSampleIndex;
   
+  // Model selection
+  ModelType _selectedModel = ModelType.msrf;
+  
   // Data
   List<List<double>>? _inputData;
   List<int>? _labels;
-  MSRFClassifier? _classifier;
+  BaseClassifier? _classifier;
   
   // Results
   BenchmarkResult? _result;
@@ -51,10 +74,8 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       _inputData = await DataService.loadSampleInput();
       setState(() => _statusMessage = 'Loaded ${_inputData!.length} samples');
 
-      // Load HMM parameters and create classifier
-      final hmmParams = await DataService.loadHMMParams();
-      _classifier = MSRFClassifier.fromJson(hmmParams);
-      setState(() => _statusMessage = 'Model loaded (${_classifier!.nStates} states)');
+      // Load the selected model
+      await _loadSelectedModel();
 
       // Try to load labels (might not exist)
       _labels = await DataService.loadLabels();
@@ -74,6 +95,53 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
     }
   }
 
+  /// Load the currently selected model
+  Future<void> _loadSelectedModel() async {
+    setState(() => _statusMessage = 'Loading ${_selectedModel.displayName}...');
+    
+    switch (_selectedModel) {
+      case ModelType.msrf:
+        final hmmParams = await DataService.loadHMMParams();
+        _classifier = MSRFClassifier.fromJson(hmmParams);
+        break;
+      case ModelType.decisionTree:
+        _classifier = DecisionTreeClassifier();
+        break;
+      case ModelType.logisticRegression:
+        _classifier = LogisticRegressionClassifier();
+        break;
+      case ModelType.randomForest:
+        _classifier = RandomForestClassifier();
+        break;
+      case ModelType.xgboost:
+        _classifier = XGBoostClassifier();
+        break;
+      case ModelType.lstm:
+        _classifier = LSTMClassifier();
+        break;
+    }
+    
+    await _classifier!.initialize();
+    setState(() => _statusMessage = '${_selectedModel.displayName} loaded');
+  }
+
+  /// Handle model selection change
+  void _onModelChanged(ModelType? newModel) async {
+    if (newModel != null && newModel != _selectedModel) {
+      setState(() {
+        _selectedModel = newModel;
+        _result = null;
+        _predictions = null;
+      });
+      await _loadSelectedModel();
+      setState(() {
+        _statusMessage = _labels != null 
+            ? 'Ready: ${_inputData!.length} samples, ${_labels!.length} labels'
+            : 'Ready: ${_inputData!.length} samples (no labels)';
+      });
+    }
+  }
+
   Future<void> _runAllSamples() async {
     if (_inputData == null || _classifier == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -85,7 +153,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
     setState(() {
       _isRunning = true;
       _benchmarkMode = 'all';
-      _statusMessage = 'Running inference on ALL ${_inputData!.length} samples...';
+      _statusMessage = 'Running ${_selectedModel.displayName} on ALL ${_inputData!.length} samples...';
       _result = null;
       _predictions = null;
       _selectedSampleIndex = null;
@@ -144,7 +212,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
 
       setState(() {
         _isRunning = false;
-        _statusMessage = 'Benchmark complete! (All ${_inputData!.length} samples)';
+        _statusMessage = '${_selectedModel.displayName} complete! (All ${_inputData!.length} samples)';
       });
     } catch (e) {
       setState(() {
@@ -170,7 +238,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
     setState(() {
       _isRunning = true;
       _benchmarkMode = 'single';
-      _statusMessage = 'Running inference on sample #${_selectedSampleIndex! + 1}...';
+      _statusMessage = 'Running ${_selectedModel.displayName} on sample #${_selectedSampleIndex! + 1}...';
       _result = null;
       _predictions = null;
     });
@@ -233,7 +301,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
 
       setState(() {
         _isRunning = false;
-        _statusMessage = 'Single sample benchmark complete! (Sample #${_selectedSampleIndex! + 1})';
+        _statusMessage = '${_selectedModel.displayName} complete! (Sample #${_selectedSampleIndex! + 1})';
       });
     } catch (e) {
       setState(() {
@@ -247,7 +315,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MSRF Benchmark'),
+        title: const Text('Model Benchmark'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -261,6 +329,10 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Model Selection Dropdown
+            _buildModelSelector(),
+            const SizedBox(height: 16),
+            
             // Status Card
             _buildStatusCard(),
             const SizedBox(height: 16),
@@ -277,6 +349,74 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
               const SizedBox(height: 16),
               _buildPredictionSummaryCard(),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModelSelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.model_training, color: Colors.purple),
+                const SizedBox(width: 8),
+                Text(
+                  'Select Model',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<ModelType>(
+              value: _selectedModel,
+              isExpanded: true,
+              decoration: InputDecoration(
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              selectedItemBuilder: (context) {
+                // Show only the name in the selected item (collapsed state)
+                return ModelType.values.map((model) {
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(model.displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  );
+                }).toList();
+              },
+              items: ModelType.values.map((model) {
+                // Show name + description in the dropdown menu
+                return DropdownMenuItem<ModelType>(
+                  value: model,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(model.displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Text(model.description, style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: _isRunning ? null : _onModelChanged,
+            ),
+            // Show description of selected model below dropdown
+            Padding(
+              padding: const EdgeInsets.only(top: 8, left: 4),
+              child: Text(
+                _selectedModel.description,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
       ),
